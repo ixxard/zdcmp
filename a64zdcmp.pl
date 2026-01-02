@@ -1,5 +1,5 @@
 #!/usr/bin/env swipl
-# 
+#
 :- use_module(library(clpfd)).
 :- dynamic insn/5, func/1, slot/2, stmt/1, ptr_var/2.
 :- discontiguous value_at/3.
@@ -50,7 +50,7 @@ hex_codes_to_number([C|Cs], Base, Acc, N) :-
     Acc1 is Acc * Base + V,
     hex_codes_to_number(Cs, Base, Acc1, N).
 
-% i stole this from when i was trying cryptopals
+% its stolen from when i was trying cryptopals
 hex_digit_value(C, V) :- C >= 0'0, C =< 0'9, !, V is C - 0'0.
 hex_digit_value(C, V) :- C >= 0'a, C =< 0'f, !, V is C - 0'a + 10.
 hex_digit_value(C, V) :- C >= 0'A, C =< 0'F, !, V is C - 0'A + 10.
@@ -207,6 +207,11 @@ value_at(R, PC, V) :-
 written_before(R, PC) :-
     insn(P, _, R, _, _),
     P < PC,
+    Op \= mov,   % mov doesn't count
+    Op \= load,  % load doesn't count
+    Op \= cmp,   % cmp writes flags, not registers
+    Op \= cmn,   % cmn writes flags, not registers
+    Op \= tst,   % tst writes flags, not registers
     !.
 
 value_at(R, PC, V) :-
@@ -241,8 +246,11 @@ value_at(R, PC, Expr) :-
         ( LastA = sp(_) ->
             catch(value_at(LastA, LastP, Expr), _, Expr = LastA)
         ; LastA = ptr(PtrReg) ->
-            catch(value_at(PtrReg, LastP, PtrVal), _, PtrVal = PtrReg),
-            Expr = deref(PtrVal)
+            ( arg_reg(PtrReg, ArgName) ->
+                Expr = deref(ArgName)
+            ;
+                Expr = deref(PtrReg)
+            )
         ;
             catch(value_at(LastA, LastP, Expr), _, Expr = LastA)
         )
@@ -363,11 +371,22 @@ extract_assigns :-
 is_simple_param_store(E) :-
     member(E, [arg0, arg1, arg2, arg3]).
 
+%extract_return :-
+%    insn(PC, ret, _, _, _),
+%    !,
+%    catch(value_at("w0", PC, E), _, E = "w0"),
+%    assertz(stmt(return(E))).
+%extract_return.
+
 extract_return :-
     insn(PC, ret, _, _, _),
     !,
-    catch(value_at("w0", PC, E), _, E = "w0"),
-    assertz(stmt(return(E))).
+    ( written_before("w0", PC) ->
+        catch(value_at("w0", PC, E), _, E = "w0"),
+        assertz(stmt(return(E)))
+    ;
+        true
+    ).
 extract_return.
 
 extract_control_flow :-
@@ -503,33 +522,33 @@ collect_params(Params) :-
     ), UsedArgs2),
     append(UsedArgs1, UsedArgs2, UsedArgs0),
     sort(UsedArgs0, UsedArgs),
-    
+
     findall(ArgName, (
         member(ArgName, UsedArgs),
         arg_reg(Reg, ArgName),
         used_as_pointer(Reg)
     ), PtrArgs0),
     sort(PtrArgs0, PtrArgs),
-    
+
     subtract(UsedArgs, PtrArgs, ValArgs),
-    
+
     findall(P, (
         member(ArgName, PtrArgs),
         atom_concat('int *', ArgName, P)
     ), PtrParams),
-    
+
     findall(P, (
         member(ArgName, ValArgs),
         detect_param_type(ArgName, Type),
         atom_concat(Type, ' ', TypeSpace),
         atom_concat(TypeSpace, ArgName, P)
     ), ValParams),
-    
+
     append(PtrParams, ValParams, AllParams),
     ( AllParams = [] -> Params = ['void'] ; Params = AllParams ).
 
 detect_param_type(ArgName, Type) :-
-    ( arg_reg(Reg, ArgName), atom_string(Reg, RegStr), sub_string(RegStr, 0, 1, _, "d"), 
+    ( arg_reg(Reg, ArgName), atom_string(Reg, RegStr), sub_string(RegStr, 0, 1, _, "d"),
       insn(_, _, Reg, _, _) -> Type = 'double'
     ; arg_reg(Reg, ArgName), atom_string(Reg, RegStr), sub_string(RegStr, 0, 1, _, "s"),
       insn(_, _, Reg, _, _) -> Type = 'float'
